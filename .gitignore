@@ -1,4 +1,8 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-build-linux/
+.venv-build-windows/
+build/
+dist/
 downloads/

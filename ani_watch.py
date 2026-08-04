@@ -88,12 +88,14 @@ from ani_watch_core import (
     Episode,
     ani_cli_version,
     build_ani_cli_command,
+    build_player_command,
     dependency_status,
     extract_selected_link,
     fetch_episodes,
     find_ani_cli,
     install_ani_cli,
     missing_required_dependencies,
+    prepare_process_command,
     search_anime,
 )
 
@@ -145,6 +147,8 @@ class MainWindow(QMainWindow):
         self.pending_player = "mpv"
         self.pending_title = ""
         self.pending_episode = ""
+        self.pending_subtitle_language = "en"
+        self.pending_subtitle_label = "Inglês"
         self.pool = QThreadPool.globalInstance()
 
         self.setWindowTitle(APP_NAME)
@@ -153,7 +157,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_theme()
         QShortcut(QKeySequence("Ctrl+L"), self, activated=self._focus_search)
-        self._refresh_installation(auto_install=True)
+        self._refresh_installation(auto_install=os.name != "nt")
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -265,9 +269,23 @@ class MainWindow(QMainWindow):
         self.player_combo.addItems(["mpv", "vlc"])
         player_box.addWidget(player_label)
         player_box.addWidget(self.player_combo)
+
+        subtitle_box = QVBoxLayout()
+        subtitle_label = QLabel("Legenda")
+        subtitle_label.setObjectName("fieldLabel")
+        self.subtitle_combo = QComboBox()
+        self.subtitle_combo.addItem("Português", "pt-BR")
+        self.subtitle_combo.addItem("Inglês", "en")
+        self.subtitle_combo.setCurrentIndex(1)
+        self.subtitle_combo.setToolTip(
+            "Preferência de faixa; vídeos com legenda gravada não podem ser alterados."
+        )
+        subtitle_box.addWidget(subtitle_label)
+        subtitle_box.addWidget(self.subtitle_combo)
         options.addLayout(episode_box, 2)
         options.addLayout(quality_box, 1)
         options.addLayout(player_box, 1)
+        options.addLayout(subtitle_box, 1)
         detail_layout.addLayout(options)
 
         self.dubbed_checkbox = QCheckBox("Usar versão dublada quando disponível")
@@ -404,7 +422,7 @@ class MainWindow(QMainWindow):
                 "background:#2a1b1d;color:#ff9b9b;border:1px solid #5a3034;"
                 "border-radius:14px;padding:7px 12px;font-weight:700;"
             )
-            self.install_button.setText("Instalar")
+            self.install_button.setText("Como instalar" if os.name == "nt" else "Instalar")
 
         status = dependency_status()
         missing = missing_required_dependencies(status)
@@ -421,6 +439,15 @@ class MainWindow(QMainWindow):
             self.dependencies_label.setStyleSheet("color: #78dba5;")
 
     def _install_or_update(self) -> None:
+        if os.name == "nt":
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                "No Windows, instale o ani-cli pelo Scoop e mantenha o Git Bash "
+                "disponível no PATH. Depois, reabra o Ani-Watch.\n\n"
+                "Comando: scoop install ani-cli",
+            )
+            return
         self.install_button.setEnabled(False)
         self._set_busy()
 
@@ -544,6 +571,8 @@ class MainWindow(QMainWindow):
         self.pending_player = selected_player
         self.pending_title = self.selected.title
         self.pending_episode = episode
+        self.pending_subtitle_language = str(self.subtitle_combo.currentData())
+        self.pending_subtitle_label = self.subtitle_combo.currentText()
         self.process_kind = "download" if download else "resolve"
         self.process_output = ""
         self._update_action_buttons()
@@ -553,8 +582,9 @@ class MainWindow(QMainWindow):
         if not download:
             environment.insert("ANI_CLI_PLAYER", "debug")
         self.process.setProcessEnvironment(environment)
-        self.process.setProgram(command[0])
-        self.process.setArguments(command[1:])
+        process_command = prepare_process_command(command)
+        self.process.setProgram(process_command[0])
+        self.process.setArguments(process_command[1:])
         self.process.readyReadStandardOutput.connect(self._read_process_output)
         self.process.readyReadStandardError.connect(self._read_process_error)
         self.process.finished.connect(self._process_finished)
@@ -606,16 +636,12 @@ class MainWindow(QMainWindow):
 
     def _start_player(self, media_url: str) -> None:
         title = f"{self.pending_title} Episode {self.pending_episode}"
-        if self.pending_player == "vlc":
-            command = [
-                "vlc",
-                "--no-one-instance",
-                "--play-and-exit",
-                f"--meta-title={title}",
-                media_url,
-            ]
-        else:
-            command = ["mpv", f"--force-media-title={title}", media_url]
+        command = build_player_command(
+            self.pending_player,
+            media_url,
+            title,
+            self.pending_subtitle_language,
+        )
 
         self.process_kind = "player"
         self.process_output = ""
@@ -628,7 +654,8 @@ class MainWindow(QMainWindow):
         self.process.finished.connect(self._process_finished)
         self.process.errorOccurred.connect(self._process_error)
         self._append_log(
-            f"Reproduzindo no {self.pending_player}. Feche o player para liberar os controles."
+            f"Reproduzindo no {self.pending_player} · preferência de legenda: "
+            f"{self.pending_subtitle_label}. Feche o player para liberar os controles."
         )
         self._update_action_buttons()
         self.process.start()

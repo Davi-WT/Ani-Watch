@@ -5,8 +5,11 @@ from unittest.mock import patch
 from ani_watch_core import (
     AnimeResult,
     build_ani_cli_command,
+    build_player_command,
     extract_selected_link,
     fetch_episodes,
+    missing_required_dependencies,
+    prepare_process_command,
     search_anime,
 )
 
@@ -58,6 +61,50 @@ class AniCliCoreTests(unittest.TestCase):
         self.assertEqual(
             extract_selected_link(output), "https://example.test/video.m3u8"
         )
+
+    def test_mpv_prefers_portuguese_subtitles_with_english_fallback(self):
+        command = build_player_command(
+            "mpv",
+            "https://example.test/video.m3u8",
+            "Example Episode 1",
+            "pt-BR",
+        )
+        self.assertIn("--slang=pt-BR,pt,por,en,eng", command)
+
+    def test_vlc_prefers_english_subtitles(self):
+        command = build_player_command(
+            "vlc",
+            "https://example.test/video.m3u8",
+            "Example Episode 1",
+            "en",
+        )
+        self.assertIn("--sub-language=en,eng", command)
+
+    def test_windows_batch_commands_use_command_interpreter(self):
+        command = prepare_process_command(
+            ["C:\\Apps\\ani-cli.cmd", "one piece", "--episode", "1"],
+            platform_name="nt",
+            command_interpreter="C:\\Windows\\System32\\cmd.exe",
+        )
+        self.assertEqual(
+            command[:4],
+            ["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c"],
+        )
+        self.assertIn("ani-cli.cmd", command[4])
+
+    def test_windows_dependencies_accept_tools_provided_by_git_bash(self):
+        status = {
+            "bash": True,
+            "curl": False,
+            "grep": False,
+            "sed": False,
+            "fzf": True,
+            "mpv": True,
+            "vlc": False,
+            "yt-dlp": False,
+            "ffmpeg": False,
+        }
+        self.assertEqual(missing_required_dependencies(status, platform_name="nt"), [])
 
 
 if __name__ == "__main__":

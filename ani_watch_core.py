@@ -78,8 +78,9 @@ def ani_cli_version(executable: Path | None = None) -> str | None:
     if executable is None:
         return None
     try:
+        command = prepare_process_command([str(executable), "--version"])
         result = subprocess.run(
-            [str(executable), "--version"],
+            command,
             capture_output=True,
             text=True,
             timeout=5,
@@ -135,16 +136,51 @@ def install_ani_cli(progress: Callable[[str], None] | None = None) -> Path:
 def dependency_status() -> dict[str, bool]:
     """Return the dependencies relevant to normal playback and downloads."""
 
-    names = ("curl", "grep", "sed", "fzf", "mpv", "vlc", "yt-dlp", "ffmpeg")
+    names = (
+        "bash",
+        "curl",
+        "grep",
+        "sed",
+        "fzf",
+        "mpv",
+        "vlc",
+        "yt-dlp",
+        "ffmpeg",
+    )
     return {name: shutil.which(name) is not None for name in names}
 
 
-def missing_required_dependencies(status: dict[str, bool] | None = None) -> list[str]:
+def missing_required_dependencies(
+    status: dict[str, bool] | None = None,
+    platform_name: str | None = None,
+) -> list[str]:
     status = status or dependency_status()
-    missing = [name for name in ("curl", "grep", "sed", "fzf") if not status[name]]
+    platform_name = platform_name or os.name
+    command_dependencies = (
+        ("bash", "fzf") if platform_name == "nt" else ("curl", "grep", "sed", "fzf")
+    )
+    missing = [name for name in command_dependencies if not status[name]]
     if not status["mpv"] and not status["vlc"]:
         missing.append("mpv ou vlc")
     return missing
+
+
+def prepare_process_command(
+    command: list[str],
+    platform_name: str | None = None,
+    command_interpreter: str | None = None,
+) -> list[str]:
+    """Wrap Windows batch launchers so QProcess can execute them reliably."""
+
+    if not command:
+        raise AniCliError("Não há um comando para executar.")
+    platform_name = platform_name or os.name
+    if platform_name != "nt" or Path(command[0]).suffix.lower() not in {".bat", ".cmd"}:
+        return command
+
+    interpreter = command_interpreter or os.environ.get("COMSPEC", "cmd.exe")
+    shell_command = subprocess.list2cmdline(command)
+    return [interpreter, "/d", "/s", "/c", shell_command]
 
 
 def search_anime(query: str) -> list[AnimeResult]:
@@ -229,6 +265,42 @@ def build_ani_cli_command(
     if download:
         command.append("--download")
     return command
+
+
+def build_player_command(
+    player: str,
+    media_url: str,
+    title: str,
+    subtitle_language: str = "en",
+) -> list[str]:
+    """Build a player command with the requested subtitle preference."""
+
+    language_codes = {
+        "pt-BR": ("pt-BR", "pt", "por", "en", "eng"),
+        "en": ("en", "eng"),
+    }
+    try:
+        preferred_languages = ",".join(language_codes[subtitle_language])
+    except KeyError as exc:
+        raise AniCliError("O idioma de legenda selecionado não é válido.") from exc
+
+    if player == "vlc":
+        return [
+            "vlc",
+            "--no-one-instance",
+            "--play-and-exit",
+            f"--meta-title={title}",
+            f"--sub-language={preferred_languages}",
+            media_url,
+        ]
+    if player == "mpv":
+        return [
+            "mpv",
+            f"--force-media-title={title}",
+            f"--slang={preferred_languages}",
+            media_url,
+        ]
+    raise AniCliError("O player selecionado não é válido.")
 
 
 def extract_selected_link(output: str) -> str:
